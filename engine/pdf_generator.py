@@ -318,18 +318,27 @@ def generate_resume_pdf(result: Dict[str, Any]) -> bytes:
             if not isinstance(proj, dict):
                 body(str(proj))
                 continue
-            pdf.set_font('Helvetica', 'B', 11)
-            pdf.set_text_color(30, 30, 30)
+
+            # Project name - bold, on its own line
             name_text = str(proj.get('name', ''))
+            if name_text:
+                pdf.set_font('Helvetica', 'B', 11)
+                pdf.set_text_color(30, 30, 30)
+                pdf.multi_cell(0, 7, _safe(name_text), new_x="LMARGIN", new_y="NEXT")
+
+            # Tech stack - italic, on its own line (like company/dates in experience)
             tech = str(proj.get('tech', ''))
-            header = name_text
             if tech:
-                header += f' [{tech}]'
-            pdf.cell(0, 7, _safe(header), new_x="LMARGIN", new_y="NEXT")
+                pdf.set_font('Helvetica', 'I', 10)
+                pdf.set_text_color(100, 100, 100)
+                pdf.cell(0, 6, _safe(tech), new_x="LMARGIN", new_y="NEXT")
+
+            pdf.ln(2)
+            # Description as body text
             desc = proj.get('description', '')
             if desc:
-                body(str(desc))
-            pdf.ln(1)
+                bullet(str(desc))
+            pdf.ln(2)
 
     # Education
     education = opt.get('education', [])
