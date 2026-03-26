@@ -336,7 +336,7 @@ async def receive_resume_text(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(
         "✅ Resume received!\n\n"
         "📋 Step 2/2: Job Description\n\n"
-        "Now paste the job description you're targeting."
+        "Now paste the job description text OR upload a .txt or .pdf file containing the JD."
     )
     return JOB_DESCRIPTION
 
@@ -371,7 +371,7 @@ async def receive_resume_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(
             f"✅ Resume extracted from {document.file_name}!\n\n"
             "📋 Step 2/2: Job Description\n\n"
-            "Now paste the job description you're targeting."
+            "Now paste the job description text OR upload a .txt or .pdf file containing the JD."
         )
         return JOB_DESCRIPTION
 
@@ -438,6 +438,81 @@ async def receive_jd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         context.user_data.clear()
         return ConversationHandler.END
+
+
+async def receive_jd_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle JD uploaded as a .txt or .pdf file."""
+    document = update.message.document
+    file_name = document.file_name.lower() if document.file_name else ''
+
+    if not (file_name.endswith('.txt') or file_name.endswith('.pdf')):
+        await update.message.reply_text("⚠️ Please upload a `.txt` or `.pdf` file, or paste the JD text directly.")
+        return JOB_DESCRIPTION
+
+    try:
+        file = await document.get_file()
+        file_bytes = await file.download_as_bytearray()
+
+        if file_name.endswith('.pdf'):
+            if not PDF_SUPPORT:
+                await update.message.reply_text("⚠️ PDF support not available. Please paste the JD text directly.")
+                return JOB_DESCRIPTION
+            jd_text = _extract_text_from_pdf(bytes(file_bytes))
+        else:
+            jd_text = file_bytes.decode('utf-8', errors='replace')
+
+        if len(jd_text.strip()) < 30:
+            await update.message.reply_text("⚠️ Couldn't extract enough text. Please paste the JD text directly.")
+            return JOB_DESCRIPTION
+
+        context.user_data['jd_text'] = jd_text
+        logger.info(f"Received JD file ({document.file_name}, {len(jd_text)} chars) from user {update.effective_user.id}")
+
+        await update.message.reply_text(f"✅ JD extracted from {document.file_name}!\n\n⏳ Analyzing your resume against the JD...")
+
+        resume_text = context.user_data['resume_text']
+
+        # Run Phase 1 analysis (same as receive_jd)
+        analysis_result = run_analysis_only(resume_text, jd_text, gemini_api_key=GEMINI_API_KEY)
+        context.user_data['analysis_result'] = analysis_result
+
+        # Generate and send the radar chart
+        try:
+            ma = analysis_result['match_analysis']
+            scores_dict = {
+                'keyword': ma['keyword_match_score'],
+                'skills': ma['skills_match_score'],
+                'experience': ma['experience_score'],
+                'achievement': ma['achievement_score'],
+                'formatting': ma['formatting_score'],
+            }
+            chart_buf = generate_radar_chart(scores_dict)
+            await update.message.reply_photo(
+                photo=chart_buf,
+                caption="\U0001f4ca Your ATS Performance Breakdown"
+            )
+        except Exception as e:
+            logger.error(f"Radar chart error: {e}")
+
+        # Send detailed analysis text
+        analysis_msg = _format_analysis_message(analysis_result)
+        await _send_long_message(update, analysis_msg)
+
+        # Ask if they want to generate optimized resume
+        await update.message.reply_text(
+            "📄 Would you like me to generate an AI-optimized resume?\n\n"
+            "I'll use Gemini AI to rewrite your bullets with strong action verbs, "
+            "inject missing keywords naturally, and tailor your summary to this JD.",
+            reply_markup=GENERATE_KEYBOARD,
+        )
+        return GENERATE_CHOICE
+
+    except Exception as e:
+        logger.error(f"JD file error: {e}", exc_info=True)
+        await update.message.reply_text(
+            "❌ Error reading JD file. Please paste the JD text directly or try again."
+        )
+        return JOB_DESCRIPTION
 
 
 async def receive_generate_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -583,6 +658,7 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_resume_text),
             ],
             JOB_DESCRIPTION: [
+                MessageHandler(filters.Document.ALL, receive_jd_file),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_jd),
             ],
             GENERATE_CHOICE: [

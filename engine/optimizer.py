@@ -132,16 +132,16 @@ def optimize_resume(
 
         optimized = json.loads(response_text)
 
-        # Validate and ensure original data is preserved where needed
+        # Validate and ensure original data is preserved where needed, especially if Gemini drops a section
         optimized_resume = {
             'name': parsed_resume.get('name', 'Unknown'),
             'contact': parsed_resume.get('contact', ''),
-            'summary': optimized.get('summary', parsed_resume.get('summary', '')),
-            'skills': optimized.get('skills', parsed_resume.get('skills', [])),
-            'experience': optimized.get('experience', []),
-            'projects': optimized.get('projects', []),
-            'education': optimized.get('education', []),
-            'certifications': optimized.get('certifications', parsed_resume.get('certifications', [])),
+            'summary': optimized.get('summary') or parsed_resume.get('summary', ''),
+            'skills': optimized.get('skills') or parsed_resume.get('skills', []),
+            'experience': optimized.get('experience') or parsed_resume.get('experience', []),
+            'projects': optimized.get('projects') or parsed_resume.get('projects', []),
+            'education': optimized.get('education') or parsed_resume.get('education', []),
+            'certifications': optimized.get('certifications') or parsed_resume.get('certifications', []),
         }
 
         tailoring_notes = optimized.get('tailoring_notes', 'Resume was optimized to better match the job description keywords and requirements.')
