@@ -434,8 +434,7 @@ async def receive_jd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     except Exception as e:
         logger.error(f"Analysis error: {e}", exc_info=True)
         await update.message.reply_text(
-            f"❌ **Error during analysis:**\n`{str(e)[:500]}`\n\nPlease try again with /analyze.",
-            parse_mode='Markdown'
+            "\u274c Error during analysis. Please try again with /analyze."
         )
         context.user_data.clear()
         return ConversationHandler.END

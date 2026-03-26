@@ -224,5 +224,5 @@ def _fallback_optimize(parsed_resume: Dict, parsed_jd: Dict, error: str) -> Dict
             ],
             'certifications': parsed_resume.get('certifications', []),
         },
-        'tailoring_notes': f'Fallback optimization applied (Gemini error: {error}). Skills list enhanced with JD keywords found in resume text. Weak bullet phrases replaced with stronger action verbs.',
+        'tailoring_notes': 'Resume was optimized using rule-based enhancement. Skills list enhanced with JD keywords found in resume text. Weak bullet phrases replaced with stronger action verbs.',
     }
