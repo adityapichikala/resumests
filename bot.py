@@ -28,6 +28,8 @@ except ImportError:
     PDF_SUPPORT = False
 
 from engine.pipeline import run_analysis_only, run_optimization
+from engine.pdf_generator import generate_ats_report_pdf, generate_resume_pdf
+from engine.visuals import generate_radar_chart
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 load_dotenv()
@@ -52,18 +54,32 @@ RESUME, JOB_DESCRIPTION, GENERATE_CHOICE, FORMAT_TYPE = range(4)
 
 # ─── Keyboards ───────────────────────────────────────────────────────────────
 FORMAT_KEYBOARD = ReplyKeyboardMarkup(
-    [['modern', 'sidebar'], ['one-page', 'two-page']],
+    [
+        ['📋 Modern - Clean & Simple'],
+        ['📊 Sidebar - Skills on Left'],
+        ['📄 One-Page - Compact'],
+        ['📑 Two-Page - Full Detail'],
+    ],
     one_time_keyboard=True,
     resize_keyboard=True,
 )
+
+FORMAT_MAP = {
+    '📋 modern - clean & simple': 'modern',
+    '📊 sidebar - skills on left': 'sidebar',
+    '📄 one-page - compact': 'one-page',
+    '📑 two-page - full detail': 'two-page',
+    'modern': 'modern', # Keep original for direct input if needed
+    'sidebar': 'sidebar',
+    'one-page': 'one-page',
+    'two-page': 'two-page',
+}
 
 GENERATE_KEYBOARD = ReplyKeyboardMarkup(
     [['✅ Yes, generate optimized resume', '❌ No, thanks']],
     one_time_keyboard=True,
     resize_keyboard=True,
 )
-
-VALID_FORMATS = {'modern', 'sidebar', 'one-page', 'two-page'}
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -380,11 +396,29 @@ async def receive_jd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     resume_text = context.user_data['resume_text']
 
     try:
-        # Phase 1: Score only (no Gemini call — instant)
-        analysis_result = run_analysis_only(resume_text, jd_text)
+        # Phase 1: Parse via Gemini + Score + Issues + Suggestions
+        analysis_result = run_analysis_only(resume_text, jd_text, gemini_api_key=GEMINI_API_KEY)
         context.user_data['analysis_result'] = analysis_result
 
-        # Send analysis results
+        # Generate and send the radar chart FIRST
+        try:
+            ma = analysis_result['match_analysis']
+            scores_dict = {
+                'keyword': ma['keyword_match_score'],
+                'skills': ma['skills_match_score'],
+                'experience': ma['experience_score'],
+                'achievement': ma['achievement_score'],
+                'formatting': ma['formatting_score'],
+            }
+            chart_buf = generate_radar_chart(scores_dict)
+            await update.message.reply_photo(
+                photo=chart_buf,
+                caption="\U0001f4ca Your ATS Performance Breakdown"
+            )
+        except Exception as e:
+            logger.error(f"Radar chart error: {e}")
+
+        # Send detailed analysis text
         analysis_msg = _format_analysis_message(analysis_result)
         await _send_long_message(update, analysis_msg)
 
@@ -412,45 +446,59 @@ async def receive_generate_choice(update: Update, context: ContextTypes.DEFAULT_
     choice = update.message.text.strip().lower()
 
     if 'no' in choice:
-        # Send analysis JSON only and end
+        # Send analysis as PDF and end
         analysis_result = context.user_data.get('analysis_result', {})
-        # Remove internal parsed data before sending
-        json_result = {k: v for k, v in analysis_result.items() if not k.startswith('_')}
-        json_str = json.dumps(json_result, indent=2, ensure_ascii=False)
-        json_bytes = json_str.encode('utf-8')
-        json_file = io.BytesIO(json_bytes)
-        json_file.name = 'ats_analysis_result.json'
 
-        await update.message.reply_document(
-            document=json_file,
-            filename='ats_analysis_result.json',
-            caption="📁 ATS analysis report (JSON)",
-        )
+        try:
+            report_pdf = generate_ats_report_pdf(analysis_result)
+            pdf_file = io.BytesIO(report_pdf)
+            pdf_file.name = 'ats_analysis_report.pdf'
+
+            await update.message.reply_document(
+                document=pdf_file,
+                filename='ats_analysis_report.pdf',
+                caption="📊 ATS Analysis Report (PDF)",
+            )
+        except Exception as e:
+            logger.error(f"PDF generation error: {e}")
+            # Fallback to JSON
+            json_result = {k: v for k, v in analysis_result.items() if not k.startswith('_')}
+            json_str = json.dumps(json_result, indent=2, ensure_ascii=False)
+            json_file = io.BytesIO(json_str.encode('utf-8'))
+            json_file.name = 'ats_analysis_result.json'
+            await update.message.reply_document(
+                document=json_file,
+                filename='ats_analysis_result.json',
+                caption="📁 ATS analysis report (JSON)",
+            )
 
         await update.message.reply_text(
-            "✅ **Done!** Use /analyze to analyze another resume.",
+            "✅ Done! Use /analyze to analyze another resume.",
             reply_markup=ReplyKeyboardRemove(),
-            parse_mode='Markdown'
         )
         context.user_data.clear()
         return ConversationHandler.END
 
     # User wants optimized resume → ask for format
     await update.message.reply_text(
-        "🎨 **Choose your resume format:**",
+        "🎨 Choose your resume format:\n\n"
+        "📋 Modern - Clean single-column layout\n"
+        "📊 Sidebar - Skills on left, experience on right\n"
+        "📄 One-Page - Compact, max 4 bullets per role\n"
+        "📑 Two-Page - Full detail, all sections expanded",
         reply_markup=FORMAT_KEYBOARD,
-        parse_mode='Markdown'
     )
     return FORMAT_TYPE
 
 
 async def receive_format(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive format type, run Phase 2 optimization via Gemini, send results."""
-    format_type = update.message.text.strip().lower()
+    raw_choice = update.message.text.strip().lower()
+    format_type = FORMAT_MAP.get(raw_choice)
 
-    if format_type not in VALID_FORMATS:
+    if not format_type:
         await update.message.reply_text(
-            "⚠️ Invalid format. Please choose one:",
+            "⚠️ Please tap one of the buttons below:",
             reply_markup=FORMAT_KEYBOARD,
         )
         return FORMAT_TYPE
@@ -468,45 +516,46 @@ async def receive_format(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Phase 2: Optimize via Gemini
         complete_result = run_optimization(analysis_result, format_type, GEMINI_API_KEY)
 
-        # Send optimized resume
+        # Send optimized resume text preview
         opt_msg = _format_optimized_resume_message(complete_result)
         await _send_long_message(update, opt_msg)
 
-        # Send full JSON
-        json_str = json.dumps(complete_result, indent=2, ensure_ascii=False)
-        json_bytes = json_str.encode('utf-8')
-        json_file = io.BytesIO(json_bytes)
-        json_file.name = 'ats_full_report.json'
+        # Send ATS Report PDF
+        try:
+            report_pdf = generate_ats_report_pdf(complete_result)
+            report_file = io.BytesIO(report_pdf)
+            report_file.name = 'ats_full_report.pdf'
 
-        await update.message.reply_document(
-            document=json_file,
-            filename='ats_full_report.json',
-            caption="📁 Full ATS report with optimized resume (JSON)"
-        )
+            await update.message.reply_document(
+                document=report_file,
+                filename='ats_full_report.pdf',
+                caption="📊 Full ATS Report (PDF)"
+            )
+        except Exception as e:
+            logger.error(f"Report PDF error: {e}")
 
-        # Send formatted resume as text file
-        formatted_content = complete_result.get('formatted_resume', {}).get('content', '')
-        if formatted_content:
-            resume_bytes = formatted_content.encode('utf-8')
-            resume_file = io.BytesIO(resume_bytes)
-            resume_file.name = f'optimized_resume_{format_type}.txt'
+        # Send Optimized Resume PDF
+        try:
+            resume_pdf = generate_resume_pdf(complete_result)
+            resume_file = io.BytesIO(resume_pdf)
+            resume_file.name = f'optimized_resume_{format_type}.pdf'
 
             await update.message.reply_document(
                 document=resume_file,
-                filename=f'optimized_resume_{format_type}.txt',
-                caption=f"📄 Optimized resume ({format_type} format)"
+                filename=f'optimized_resume_{format_type}.pdf',
+                caption=f"📄 Optimized Resume - {format_type.title()} (PDF)"
             )
+        except Exception as e:
+            logger.error(f"Resume PDF error: {e}")
 
         await update.message.reply_text(
-            "✅ **All done!** Use /analyze to analyze another resume.",
-            parse_mode='Markdown'
+            "✅ All done! Use /analyze to analyze another resume."
         )
 
     except Exception as e:
         logger.error(f"Optimization error: {e}", exc_info=True)
         await update.message.reply_text(
-            f"❌ **Error during optimization:**\n`{str(e)[:500]}`\n\nPlease try again with /analyze.",
-            parse_mode='Markdown'
+            f"❌ Error during optimization. Please try again with /analyze."
         )
 
     context.user_data.clear()

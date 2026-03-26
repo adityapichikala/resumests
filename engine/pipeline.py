@@ -1,9 +1,10 @@
 """
 ATS Pipeline — Orchestrates the full analysis in two phases:
-  Phase 1: parse → score → issues → suggestions (no Gemini needed)
-  Phase 2: optimize → format (uses Gemini)
+  Phase 1: parse → score → issues → suggestions (uses Gemini for parsing)
+  Phase 2: optimize → format (uses Gemini for rewriting)
 """
 
+import os
 from typing import Dict, Any
 
 from engine.parser import parse_resume, parse_job_description
@@ -23,12 +24,16 @@ from engine.optimizer import optimize_resume
 from engine.formatter import format_resume
 
 
-def run_analysis_only(resume_text: str, jd_text: str) -> Dict[str, Any]:
+def run_analysis_only(resume_text: str, jd_text: str, gemini_api_key: str = None) -> Dict[str, Any]:
     """
-    Phase 1: Parse + Score + Issues + Suggestions (no LLM call).
+    Phase 1: Parse (via Gemini) + Score + Issues + Suggestions.
     Returns analysis results with parsed data stored for Phase 2.
     """
-    parsed_resume = parse_resume(resume_text)
+    # Get API key from env if not passed
+    if not gemini_api_key:
+        gemini_api_key = os.getenv('GEMINI_API_KEY', '')
+
+    parsed_resume = parse_resume(resume_text, gemini_api_key=gemini_api_key)
     parsed_jd = parse_job_description(jd_text)
 
     keyword_score = score_keyword_match(parsed_resume, parsed_jd)
@@ -41,13 +46,17 @@ def run_analysis_only(resume_text: str, jd_text: str) -> Dict[str, Any]:
         keyword_score, skills_score, exp_score, achievement_score, formatting_score
     )
 
-    decision, failure_reasons = make_ats_decision(
+    # make_ats_decision now returns 3 values: (decision, failure_reasons, capped_score)
+    decision, failure_reasons, capped_score = make_ats_decision(
         overall_score, skills_score, achievement_score, exp_score,
         missing_skills, parsed_resume, parsed_jd
     )
 
+    # Use the capped score for display
+    display_score = capped_score
+
     confidence = get_confidence_level(
-        overall_score, keyword_score, skills_score, exp_score,
+        display_score, keyword_score, skills_score, exp_score,
         achievement_score, formatting_score
     )
 
@@ -70,7 +79,7 @@ def run_analysis_only(resume_text: str, jd_text: str) -> Dict[str, Any]:
 
     return {
         "match_analysis": {
-            "match_score": overall_score,
+            "match_score": display_score,
             "keyword_match_score": keyword_score,
             "skills_match_score": skills_score,
             "experience_score": exp_score,

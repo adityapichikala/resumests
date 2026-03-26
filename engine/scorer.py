@@ -258,10 +258,11 @@ def make_ats_decision(
     missing_skills: List[str],
     parsed_resume: Dict,
     parsed_jd: Dict,
-) -> Tuple[str, List[str]]:
+) -> Tuple[str, List[str], int]:
     """
     Make binary ATS PASS/FAIL decision.
-    Returns: (decision, failure_reasons)
+    Returns: (decision, failure_reasons, capped_score)
+    If FAIL, the overall score is capped at 69 max to avoid confusing UX.
     """
     failure_reasons = []
 
@@ -297,7 +298,11 @@ def make_ats_decision(
         )
 
     decision = "FAIL" if failure_reasons else "PASS"
-    return decision, failure_reasons
+
+    # Cap the score at 69 if FAIL — a failing resume should never display 70+
+    capped_score = min(overall_score, 69) if decision == "FAIL" else overall_score
+
+    return decision, failure_reasons, capped_score
 
 
 def get_confidence_level(
